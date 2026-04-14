@@ -440,7 +440,7 @@ export default function ProjectDetail() {
                                 <span className={`priority-badge priority-${task.priority}`}>{task.priority}</span>
                               ) : null}
                             </div>
-                            {task.description && <p>{task.description}</p>}
+                            {task.description && <p className="task-description">{task.description}</p>}
                           </div>
                           <div className="task-status-controls" onClick={(e) => e.stopPropagation()}>
                             <button

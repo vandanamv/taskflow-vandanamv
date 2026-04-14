@@ -12,6 +12,9 @@ import (
 var DB *sql.DB
 
 func InitDB() {
+	loadEnv()
+	requireEnv("JWT_SECRET")
+
 	connStr := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		getEnv("DB_HOST", "localhost"),
@@ -32,6 +35,14 @@ func InitDB() {
 		log.Fatal(err)
 	}
 
+	if err := RunMigrations(DB); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := ensureSeedUser(); err != nil {
+		log.Fatal(err)
+	}
+
 	log.Println("Connected to DB")
 }
 
@@ -41,4 +52,10 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return val
+}
+
+func requireEnv(key string) {
+	if os.Getenv(key) == "" {
+		log.Fatalf("%s must be set", key)
+	}
 }

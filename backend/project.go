@@ -2,6 +2,8 @@ package main
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -41,6 +43,13 @@ func CreateProject(c *gin.Context) {
 
 func GetProjects(c *gin.Context) {
 	userID, _ := c.Get("user_id")
+	pagination := getPaginationParams(c)
+
+	var total int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM projects WHERE owner_id=$1`, userID).Scan(&total); err != nil {
+		c.JSON(500, gin.H{"error": "failed to count projects"})
+		return
+	}
 
 	rows, err := DB.Query(
 		`SELECT
@@ -55,8 +64,9 @@ func GetProjects(c *gin.Context) {
 		LEFT JOIN tasks t ON t.project_id = p.id
 		WHERE p.owner_id=$1
 		GROUP BY p.id, p.name, p.description
-		ORDER BY p.name ASC`,
-		userID,
+		ORDER BY p.name ASC
+		LIMIT $2 OFFSET $3`,
+		userID, pagination.Limit, pagination.Offset,
 	)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "failed to fetch projects"})
@@ -86,17 +96,22 @@ func GetProjects(c *gin.Context) {
 		})
 	}
 
-	c.JSON(200, gin.H{"projects": projects})
+	c.JSON(200, gin.H{
+		"projects": projects,
+		"meta":     paginationMeta(pagination.Page, pagination.Limit, total),
+	})
 }
 
 func GetProjectByID(c *gin.Context) {
 	projectID := c.Param("id")
+	userID, _ := c.Get("user_id")
 
 	var name string
 	var description sql.NullString
 	err := DB.QueryRow(
-		`SELECT name, description FROM projects WHERE id=$1`,
+		`SELECT name, description FROM projects WHERE id=$1 AND owner_id=$2`,
 		projectID,
+		userID,
 	).Scan(&name, &description)
 
 	if err != nil {
@@ -151,6 +166,82 @@ func GetProjectByID(c *gin.Context) {
 	})
 }
 
+func GetProjectStats(c *gin.Context) {
+	projectID := c.Param("id")
+	userID, _ := c.Get("user_id")
+
+	if err := ensureProjectOwnership(projectID, fmt.Sprint(userID)); err != nil {
+		status := 500
+		message := "failed to fetch project"
+		if errors.Is(err, sql.ErrNoRows) {
+			status = 404
+			message = "project not found"
+		}
+		c.JSON(status, gin.H{"error": message})
+		return
+	}
+
+	statusCounts := gin.H{
+		"todo":        0,
+		"in_progress": 0,
+		"done":        0,
+	}
+
+	rows, err := DB.Query(
+		`SELECT status, COUNT(*)
+		FROM tasks
+		WHERE project_id=$1
+		GROUP BY status`,
+		projectID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "failed to fetch status counts"})
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		statusCounts[status] = count
+	}
+
+	assigneeCounts := gin.H{}
+	assigneeRows, err := DB.Query(
+		`SELECT COALESCE(assignee_id::text, 'unassigned') AS assignee_key, COUNT(*)
+		FROM tasks
+		WHERE project_id=$1
+		GROUP BY assignee_key
+		ORDER BY assignee_key`,
+		projectID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "failed to fetch assignee counts"})
+		return
+	}
+	defer assigneeRows.Close()
+
+	for assigneeRows.Next() {
+		var assigneeKey string
+		var count int
+		if err := assigneeRows.Scan(&assigneeKey, &count); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		assigneeCounts[assigneeKey] = count
+	}
+
+	c.JSON(200, gin.H{
+		"project_id":  projectID,
+		"by_status":   statusCounts,
+		"by_assignee": assigneeCounts,
+	})
+}
+
 func DeleteProject(c *gin.Context) {
 	projectID := c.Param("id")
 	userID, _ := c.Get("user_id")
@@ -162,7 +253,7 @@ func DeleteProject(c *gin.Context) {
 		return
 	}
 
-	if ownerID != userID {
+	if ownerID != fmt.Sprint(userID) {
 		c.JSON(403, gin.H{"error": "not authorized to delete this project"})
 		return
 	}
@@ -178,4 +269,17 @@ func DeleteProject(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"message": "project deleted"})
+}
+
+func ensureProjectOwnership(projectID, userID string) error {
+	var ownerID string
+	if err := DB.QueryRow(`SELECT owner_id FROM projects WHERE id=$1`, projectID).Scan(&ownerID); err != nil {
+		return err
+	}
+
+	if ownerID != userID {
+		return sql.ErrNoRows
+	}
+
+	return nil
 }

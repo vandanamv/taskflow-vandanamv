@@ -8,9 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func main() {
-	InitDB()
-
+func setupRouter() *gin.Engine {
 	r := gin.Default()
 
 	// ✅ ADD THIS (IMPORTANT)
@@ -43,6 +41,7 @@ func main() {
 	protected.POST("/projects", CreateProject)
 	protected.GET("/projects", GetProjects)
 	protected.GET("/projects/:id", GetProjectByID)
+	protected.GET("/projects/:id/stats", GetProjectStats)
 	protected.DELETE("/projects/:id", DeleteProject)
 
 	protected.POST("/projects/:id/tasks", CreateTask)
@@ -50,5 +49,11 @@ func main() {
 	protected.PATCH("/tasks/:id", UpdateTask)
 	protected.DELETE("/tasks/:id", DeleteTask)
 
+	return r
+}
+
+func main() {
+	InitDB()
+	r := setupRouter()
 	r.Run(":8080")
 }

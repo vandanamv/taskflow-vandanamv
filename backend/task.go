@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,17 @@ func CreateTask(c *gin.Context) {
 	projectID := c.Param("id")
 	id := uuid.New()
 	userID, _ := c.Get("user_id")
+
+	if err := ensureProjectOwnership(projectID, fmt.Sprint(userID)); err != nil {
+		statusCode := 500
+		message := "failed to create task"
+		if errors.Is(err, sql.ErrNoRows) {
+			statusCode = 404
+			message = "project not found"
+		}
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
 
 	var assignee interface{}
 	if input.AssigneeID == "" {
@@ -68,21 +80,50 @@ func GetTasks(c *gin.Context) {
 	projectID := c.Param("id")
 	status := c.Query("status")
 	assignee := c.Query("assignee")
+	userID, _ := c.Get("user_id")
+	pagination := getPaginationParams(c)
 
+	if err := ensureProjectOwnership(projectID, fmt.Sprint(userID)); err != nil {
+		statusCode := 500
+		message := "failed to fetch tasks"
+		if errors.Is(err, sql.ErrNoRows) {
+			statusCode = 404
+			message = "project not found"
+		}
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+
+	countQuery := "SELECT COUNT(*) FROM tasks WHERE project_id=$1"
+	countArgs := []interface{}{projectID}
 	query := "SELECT id, title, description, status, priority, assignee_id, due_date FROM tasks WHERE project_id=$1"
 	args := []interface{}{projectID}
 	argIndex := 2
 
 	if status != "" {
+		countQuery += " AND status=$" + fmt.Sprint(argIndex)
 		query += " AND status=$" + fmt.Sprint(argIndex)
+		countArgs = append(countArgs, status)
 		args = append(args, status)
 		argIndex++
 	}
 
 	if assignee != "" {
+		countQuery += " AND assignee_id=$" + fmt.Sprint(argIndex)
 		query += " AND assignee_id=$" + fmt.Sprint(argIndex)
+		countArgs = append(countArgs, assignee)
 		args = append(args, assignee)
+		argIndex++
 	}
+
+	var total int
+	if err := DB.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
+		c.JSON(500, gin.H{"error": "failed to count tasks"})
+		return
+	}
+
+	query += " ORDER BY title ASC LIMIT $" + fmt.Sprint(argIndex) + " OFFSET $" + fmt.Sprint(argIndex+1)
+	args = append(args, pagination.Limit, pagination.Offset)
 
 	rows, err := DB.Query(query, args...)
 	if err != nil {
@@ -110,7 +151,10 @@ func GetTasks(c *gin.Context) {
 		})
 	}
 
-	c.JSON(200, gin.H{"tasks": tasks})
+	c.JSON(200, gin.H{
+		"tasks": tasks,
+		"meta":  paginationMeta(pagination.Page, pagination.Limit, total),
+	})
 }
 
 func UpdateTask(c *gin.Context) {

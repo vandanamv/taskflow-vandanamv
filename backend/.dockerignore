@@ -1,0 +1,13 @@
+.env
+.gocache
+.gomodcache
+temp_main
+*.local
+*.tmp
+*.log
+*.bak
+*.swp
+*.swo
+*.old
+*.orig
+*.go.*
