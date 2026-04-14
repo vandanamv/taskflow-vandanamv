@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -25,12 +26,7 @@ func InitDB() {
 	)
 
 	var err error
-	DB, err = sql.Open("postgres", connStr)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = DB.Ping()
+	DB, err = connectWithRetry(connStr, 15, 2*time.Second)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -44,6 +40,27 @@ func InitDB() {
 	}
 
 	log.Println("Connected to DB")
+}
+
+func connectWithRetry(connStr string, attempts int, delay time.Duration) (*sql.DB, error) {
+	var lastErr error
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		db, err := sql.Open("postgres", connStr)
+		if err != nil {
+			lastErr = err
+		} else if err := db.Ping(); err != nil {
+			lastErr = err
+			_ = db.Close()
+		} else {
+			return db, nil
+		}
+
+		log.Printf("database connection attempt %d/%d failed: %v", attempt, attempts, lastErr)
+		time.Sleep(delay)
+	}
+
+	return nil, fmt.Errorf("connect to database after %d attempts: %w", attempts, lastErr)
 }
 
 func getEnv(key, fallback string) string {
