@@ -1,0 +1,6 @@
+./auth.go
+./db.go
+./main.go
+./middleware.go
+./project.go
+./task.go
